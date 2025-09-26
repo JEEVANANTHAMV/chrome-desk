@@ -47,6 +47,13 @@ async function startTunnel() {
     clearLogs();
     
     try {
+        // Check if ngrok is authenticated
+        const hasAuth = await window.electronAPI.checkNgrokAuth();
+        if (!hasAuth) {
+            showAuthDialog();
+            return;
+        }
+        
         const result = await window.electronAPI.startTunnel();
         
         if (result.success) {
@@ -111,6 +118,44 @@ elements.toggleTerminal.addEventListener('click', toggleTerminal);
 window.electronAPI.onLog((event, message) => {
     addLog(message);
 });
+
+function showAuthDialog() {
+    const dialog = document.createElement('div');
+    dialog.className = 'auth-dialog';
+    dialog.innerHTML = `
+        <div class="auth-content">
+            <h3>Ngrok Authentication Required</h3>
+            <p>1. Sign up at <a href="#" onclick="window.electronAPI.openExternal('https://ngrok.com')">https://ngrok.com</a></p>
+            <p>2. Get your authtoken from dashboard</p>
+            <p>3. Enter it below:</p>
+            <input type="text" id="auth-token" placeholder="Enter your ngrok authtoken">
+            <div class="auth-buttons">
+                <button id="auth-cancel">Cancel</button>
+                <button id="auth-submit">Submit</button>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(dialog);
+    
+    document.getElementById('auth-cancel').onclick = () => {
+        document.body.removeChild(dialog);
+        addLog('Ngrok authentication cancelled');
+    };
+    
+    document.getElementById('auth-submit').onclick = async () => {
+        const token = document.getElementById('auth-token').value.trim();
+        if (!token) return;
+        
+        const authResult = await window.electronAPI.setNgrokToken(token);
+        document.body.removeChild(dialog);
+        
+        if (authResult) {
+            startTunnel();
+        } else {
+            addLog('Failed to set ngrok authtoken');
+        }
+    };
+}
 
 // Initialize UI
 window.electronAPI.getStatus().then(status => {

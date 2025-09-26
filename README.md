@@ -53,14 +53,32 @@ start.bat
 ```
 chrome-desk/
 ├── main.js              # Electron main process
-├── preload.js           # IPC preload script
+├── preload.js           # IPC preload script  
 ├── renderer.js          # UI logic
 ├── index.html           # Application UI
 ├── style.css            # Application styles
 ├── package.json         # Dependencies and build config
 ├── install.sh/.bat      # Installation scripts
 ├── start.sh/.bat        # Start scripts
+├── test/                # Test files
+│   ├── unit.test.js     # Unit tests
+│   ├── build.test.js    # Build validation
+│   └── integration.test.js # Integration tests
+├── validate-production.js # Production validator
 └── README.md
+```
+
+## Development Commands
+
+```bash
+# Install dependencies
+npm install
+
+# Start application (requires GUI)
+npm start
+
+# Build for distribution
+npm run build
 ```
 
 ## Scripts
@@ -88,17 +106,63 @@ chrome-desk/
 - Tunnel URLs are temporary and expire when stopped
 - All processes are properly cleaned up on exit
 
-## Building for Distribution
+## Building Installers for Distribution
 
+### Prerequisites
 ```bash
-# Install dependencies
 npm install
+```
 
-# Build for current platform
+### Build Commands
+
+**Windows (.exe installer):**
+```bash
+npm run build-win
+# Output: dist/Chrome MCP Tunnel Setup 1.0.0.exe
+```
+
+**Windows (.exe installer):**
+```bash
+npm run build-win
+# Output: dist/Chrome MCP Tunnel Setup 1.0.0.exe
+```
+
+**macOS (.dmg installer):**
+```bash
+npm run build-mac
+# Output: dist/Chrome MCP Tunnel-1.0.0.dmg
+```
+
+**Linux (AppImage):**
+```bash
+npm run build-linux
+# Output: dist/Chrome MCP Tunnel-1.0.0.AppImage
+```
+
+**Current Platform:**
+```bash
 npm run build
+```
 
-# Build for all platforms
-npm run build-all
+### Build Output Files
+```
+dist/
+├── Chrome MCP Tunnel-1.0.0-mac.zip       # macOS app (zip)
+├── Chrome MCP Tunnel-1.0.0.AppImage       # Linux installer
+├── win-unpacked/Chrome MCP Tunnel.exe     # Windows executable
+└── mac/Chrome MCP Tunnel.app              # macOS app bundle
+```
+
+### Cross-Platform Notes
+- **macOS builds**: ✅ Creates .zip and .app bundle
+- **Linux builds**: ✅ Creates AppImage
+- **Windows builds**: ⚠️ Creates unpacked .exe (requires wine for installer)
+
+### Working Commands
+```bash
+npm run build-mac    # ✅ Works - creates macOS .zip
+npm run build-linux  # ✅ Works - creates Linux AppImage  
+npm run build-win    # ⚠️ Creates unpacked Windows .exe
 ```
 
 ## Troubleshooting

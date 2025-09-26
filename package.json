@@ -6,18 +6,18 @@
   "scripts": {
     "start": "electron .",
     "build": "electron-builder",
+    "build-win": "electron-builder --win",
+    "build-mac": "electron-builder --mac",
+    "build-linux": "electron-builder --linux",
     "build-all": "electron-builder --mac --win --linux",
-    "install-deps": "npm install",
-    "test": "node test/unit.test.js && node test/build.test.js && node test/integration.test.js",
-    "test-unit": "node test/unit.test.js",
-    "test-build": "node test/build.test.js",
-    "test-integration": "node test/integration.test.js"
+    "install-deps": "npm install"
   },
+  "dependencies": {},
   "dependencies": {
-    "electron": "^27.0.0",
-    "http-proxy": "^1.18.1"
+    "ngrok": "^5.0.0-beta.2"
   },
   "devDependencies": {
+    "electron": "^27.0.0",
     "electron-builder": "^24.6.4"
   },
   "build": {
@@ -32,13 +32,26 @@
       "renderer.js",
       "index.html",
       "style.css",
-      "node_modules/**/*"
+      "node_modules/ngrok/**/*"
     ],
+    "compression": "maximum",
+    "asar": true,
+    "asarUnpack": "node_modules/ngrok/bin/**",
     "mac": {
-      "category": "public.app-category.developer-tools"
+      "category": "public.app-category.developer-tools",
+      "target": "dmg"
     },
     "win": {
       "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "allowElevation": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "runAfterFinish": false,
+      "include": "build/installer.nsh"
     },
     "linux": {
       "target": "AppImage"
