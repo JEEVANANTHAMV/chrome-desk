@@ -81,76 +81,44 @@ function log(message) {
   }
 }
 
-function checkNgrok() {
-  return new Promise((resolve) => {
-    exec('ngrok version', (error) => {
-      resolve(!error);
-    });
-  });
+function getNgrokPath() {
+  const ngrok = require('ngrok');
+  return ngrok;
 }
 
-function installNgrok() {
-  return new Promise((resolve, reject) => {
-    log('Installing ngrok...');
-    let installCmd;
-    
-    if (platform === 'win32') {
-      installCmd = 'npm install -g ngrok';
-    } else if (platform === 'darwin') {
-      installCmd = 'brew install ngrok/ngrok/ngrok || npm install -g ngrok';
-    } else {
-      installCmd = 'npm install -g ngrok';
-    }
-    
-    exec(installCmd, (error) => {
-      if (error) {
-        log(`Ngrok installation failed: ${error.message}`);
-        reject(error);
-      } else {
-        log('Ngrok installed successfully');
-        resolve();
-      }
-    });
-  });
+async function startNgrok() {
+  log('Starting ngrok tunnel...');
+  try {
+    const ngrok = getNgrokPath();
+    tunnelUrl = await ngrok.connect(9223);
+    log(`Tunnel URL: ${tunnelUrl}`);
+    return tunnelUrl;
+  } catch (error) {
+    log(`Ngrok error: ${error.message}`);
+    throw error;
+  }
 }
 
-function startNgrok() {
-  return new Promise((resolve, reject) => {
-    log('Starting ngrok tunnel...');
-    processes.ngrok = spawn('ngrok', ['http', '9223', '--log=stdout']);
-    
-    let urlFound = false;
-    
-    processes.ngrok.stdout.on('data', (data) => {
-      const output = data.toString();
-      log(`Ngrok: ${output.trim()}`);
-      
-      const urlMatch = output.match(/https:\/\/[a-z0-9-]+\.ngrok-free\.app/);
-      if (urlMatch && !urlFound) {
-        tunnelUrl = urlMatch[0];
-        urlFound = true;
-        log(`Tunnel URL: ${tunnelUrl}`);
-        resolve(tunnelUrl);
-      }
-    });
-    
-    processes.ngrok.stderr.on('data', (data) => {
-      log(`Ngrok Error: ${data.toString().trim()}`);
-    });
-    
-    processes.ngrok.on('close', (code) => {
-      log(`Ngrok process exited with code ${code}`);
-      if (!urlFound) {
-        reject(new Error('Failed to get ngrok URL'));
-      }
-    });
-    
-    setTimeout(() => {
-      if (!urlFound) {
-        reject(new Error('Ngrok timeout'));
-      }
-    }, 30000);
-  });
+async function checkNgrokAuth() {
+  try {
+    const ngrok = getNgrokPath();
+    // Check if authtoken exists in ngrok config
+    return await ngrok.getAuthtoken();
+  } catch (error) {
+    return false;
+  }
+}
+
+async function setNgrokAuth(token) {
+  try {
+    const ngrok = getNgrokPath();
+    await ngrok.authtoken(token.trim());
+    log('Ngrok authtoken set successfully');
+    return true;
+  } catch (error) {
+    log(`Failed to set authtoken: ${error.message}`);
+    return false;
+  }
 }
 
 function startChrome() {
@@ -201,51 +169,33 @@ function startProxy() {
     const hostname = tunnelUrl.replace('https://', '');
     const proxyCode = `
 const http = require('http');
-const httpProxy = require('http-proxy');
-
-const proxy = httpProxy.createProxyServer({
-  target: 'http://localhost:9222',
-  changeOrigin: true,
-  ws: true
-});
 
 const server = http.createServer((req, res) => {
-  const originalWrite = res.write;
-  const originalEnd = res.end;
-  let responseBody = [];
-  
-  res.write = function (chunk) {
-    responseBody.push(chunk);
-    return true;
+  const options = {
+    hostname: 'localhost',
+    port: 9222,
+    path: req.url,
+    method: req.method,
+    headers: req.headers
   };
   
-  res.end = function (chunk) {
-    if (chunk) responseBody.push(chunk);
-    const body = Buffer.concat(responseBody).toString();
-    
-    const modifiedBody = body.replace(
-      /ws:\\/\\/localhost:9222\\//g,
-      'wss://${hostname}/'
-    ).replace(
-      /ws=localhost:9222\\//g,
-      'ws=${hostname}/'
-    );
-    
-    res.setHeader('Content-Length', Buffer.byteLength(modifiedBody));
-    originalWrite.call(res, modifiedBody);
-    originalEnd.call(res);
-  };
+  const proxyReq = http.request(options, (proxyRes) => {
+    let body = '';
+    proxyRes.on('data', chunk => body += chunk);
+    proxyRes.on('end', () => {
+      const modifiedBody = body
+        .replace(/ws:\\/\\/localhost:9222\\//g, 'wss://${hostname}/')
+        .replace(/ws=localhost:9222\\//g, 'ws=${hostname}/');
+      
+      res.writeHead(proxyRes.statusCode, proxyRes.headers);
+      res.end(modifiedBody);
+    });
+  });
   
-  proxy.web(req, res);
+  req.pipe(proxyReq);
 });
 
-server.on('upgrade', (req, socket, head) => {
-  proxy.ws(req, socket, head);
-});
-
-server.listen(9223, () => {
-  console.log('Proxy running on port 9223');
-});
+server.listen(9223, () => console.log('Proxy running'));
 `;
     
     fs.writeFileSync(path.join(__dirname, 'proxy-temp.js'), proxyCode);
@@ -262,9 +212,16 @@ server.listen(9223, () => {
   });
 }
 
-function stopAllProcesses() {
+async function stopAllProcesses() {
   log('Stopping all processes...');
   
+  // Stop ngrok
+  try {
+    const ngrok = getNgrokPath();
+    await ngrok.disconnect();
+  } catch (e) {}
+  
+  // Stop other processes
   Object.keys(processes).forEach(key => {
     if (processes[key]) {
       processes[key].kill();
@@ -288,11 +245,6 @@ async function startTunnel() {
       return { success: false, error: 'Already running' };
     }
 
-    const hasNgrok = await checkNgrok();
-    if (!hasNgrok) {
-      await installNgrok();
-    }
-    
     await startNgrok();
     await startChrome();
     await startProxy();
@@ -303,7 +255,7 @@ async function startTunnel() {
     
   } catch (error) {
     log(`Error starting services: ${error.message}`);
-    stopAllProcesses();
+    await stopAllProcesses();
     return { success: false, error: error.message };
   }
 }
@@ -327,9 +279,28 @@ app.on('before-quit', () => {
   stopAllProcesses();
 });
 
+app.on('will-quit', (event) => {
+  if (isRunning) {
+    event.preventDefault();
+    stopAllProcesses().then(() => {
+      app.quit();
+    });
+  }
+});
+
 ipcMain.handle('start-tunnel', startTunnel);
 ipcMain.handle('stop-tunnel', () => {
   stopAllProcesses();
   return { success: true };
 });
 ipcMain.handle('get-status', () => ({ isRunning, tunnelUrl }));
+ipcMain.handle('set-ngrok-token', async (event, token) => {
+  return await setNgrokAuth(token);
+});
+ipcMain.handle('check-ngrok-auth', async () => {
+  return await checkNgrokAuth();
+});
+ipcMain.handle('open-external', async (event, url) => {
+  const { shell } = require('electron');
+  await shell.openExternal(url);
+});
