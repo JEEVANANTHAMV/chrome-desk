@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Chrome MCP Tunnel</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🌐 Chrome MCP Tunnel</h1>
+            <p>Easy Chrome remote debugging access</p>
+        </div>
+
+        <div class="status-section">
+            <div class="status-indicator">
+                <div id="status-dot" class="status-dot stopped"></div>
+                <span id="status-text">Stopped</span>
+            </div>
+        </div>
+
+        <div class="controls">
+            <button id="start-btn" class="btn btn-start">
+                <span class="btn-icon">▶</span>
+                <span class="btn-text">Start Tunnel</span>
+            </button>
+            <button id="stop-btn" class="btn btn-stop" disabled>
+                <span class="btn-icon">⏹</span>
+                <span class="btn-text">Stop Tunnel</span>
+            </button>
+        </div>
+
+        <div id="url-section" class="url-section" style="display: none;">
+            <label>Tunnel URL (Copy to your MCP client):</label>
+            <div class="url-container">
+                <input id="tunnel-url" type="text" readonly>
+                <button id="copy-btn" class="btn btn-copy">Copy</button>
+            </div>
+        </div>
+
+        <div class="terminal-section">
+            <div class="terminal-header">
+                <span>Terminal Logs</span>
+                <button id="toggle-terminal" class="btn btn-small">Show</button>
+            </div>
+            <div id="terminal" class="terminal" style="display: none;"></div>
+        </div>
+    </div>
+
+    <script src="renderer.js"></script>
+</body>
+</html>

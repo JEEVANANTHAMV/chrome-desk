@@ -1,0 +1,54 @@
+{
+  "name": "chrome-mcp-tunnel",
+  "version": "1.0.0",
+  "description": "Chrome MCP Tunnel Desktop Application",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder",
+    "build-all": "electron-builder --mac --win --linux",
+    "install-deps": "npm install",
+    "test": "node test/unit.test.js && node test/build.test.js && node test/integration.test.js",
+    "test-unit": "node test/unit.test.js",
+    "test-build": "node test/build.test.js",
+    "test-integration": "node test/integration.test.js"
+  },
+  "dependencies": {
+    "electron": "^27.0.0",
+    "http-proxy": "^1.18.1"
+  },
+  "devDependencies": {
+    "electron-builder": "^24.6.4"
+  },
+  "build": {
+    "appId": "com.chrome-mcp-tunnel.app",
+    "productName": "Chrome MCP Tunnel",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "renderer.js",
+      "index.html",
+      "style.css",
+      "node_modules/**/*"
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools"
+    },
+    "win": {
+      "target": "nsis"
+    },
+    "linux": {
+      "target": "AppImage"
+    }
+  },
+  "keywords": ["chrome", "mcp", "tunnel", "ngrok", "remote-debugging"],
+  "os": ["win32", "darwin", "linux"],
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "author": "Chrome MCP Tunnel",
+  "license": "MIT"
+}
