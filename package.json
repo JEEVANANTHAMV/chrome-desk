@@ -11,7 +11,8 @@
     "build-mac": "electron-builder --mac",
     "build-linux": "electron-builder --linux",
     "build-all": "electron-builder --mac --win --linux",
-    "install-deps": "npm install"
+    "install-deps": "npm install",
+    "prebuild": "powershell -Command \"Get-Process -Name ngrok -ErrorAction SilentlyContinue | Stop-Process -Force; Start-Sleep -Seconds 2\" || exit 0"
   },
   "dependencies": {
     "http-proxy": "^1.18.1",
@@ -35,7 +36,18 @@
       "style.css",
       "node_modules/**/*"
     ],
-    "compression": "maximum",
+    "extraResources": [
+      {
+        "from": "node_modules/ngrok/bin/ngrok.exe",
+        "to": "ngrok.exe",
+        "filter": ["**/*"]
+      },
+      {
+        "from": "node_modules/ngrok/bin/ngrok",
+        "to": "ngrok",
+        "filter": ["**/*"]
+      }
+    ],
     "asar": true,
     "asarUnpack": [
       "node_modules/ngrok/bin/**/*"
