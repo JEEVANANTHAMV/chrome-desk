@@ -1,3 +1,0 @@
-@echo off
-echo 🚀 Starting Chrome MCP Tunnel Desktop App...
-npm start

@@ -5,6 +5,7 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
+    "dev": "NODE_ENV=development electron .",
     "build": "electron-builder",
     "build-win": "electron-builder --win",
     "build-mac": "electron-builder --mac",
@@ -12,8 +13,8 @@
     "build-all": "electron-builder --mac --win --linux",
     "install-deps": "npm install"
   },
-  "dependencies": {},
   "dependencies": {
+    "http-proxy": "^1.18.1",
     "ngrok": "^5.0.0-beta.2"
   },
   "devDependencies": {
@@ -32,11 +33,13 @@
       "renderer.js",
       "index.html",
       "style.css",
-      "node_modules/ngrok/**/*"
+      "node_modules/**/*"
     ],
     "compression": "maximum",
     "asar": true,
-    "asarUnpack": "node_modules/ngrok/bin/**",
+    "asarUnpack": [
+      "node_modules/ngrok/bin/**/*"
+    ],
     "mac": {
       "category": "public.app-category.developer-tools",
       "target": "dmg"
@@ -57,8 +60,18 @@
       "target": "AppImage"
     }
   },
-  "keywords": ["chrome", "mcp", "tunnel", "ngrok", "remote-debugging"],
-  "os": ["win32", "darwin", "linux"],
+  "keywords": [
+    "chrome",
+    "mcp",
+    "tunnel",
+    "ngrok",
+    "remote-debugging"
+  ],
+  "os": [
+    "win32",
+    "darwin",
+    "linux"
+  ],
   "engines": {
     "node": ">=16.0.0"
   },
