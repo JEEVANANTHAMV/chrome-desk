@@ -47,21 +47,61 @@ async function startTunnel() {
     clearLogs();
     
     try {
-        // Check if ngrok is authenticated
-        const hasAuth = await window.electronAPI.checkNgrokAuth();
-        if (!hasAuth) {
-            showAuthDialog();
-            return;
-        }
-        
-        const result = await window.electronAPI.startTunnel();
-        
-        if (result.success) {
-            isRunning = true;
-            elements.tunnelUrl.value = result.tunnelUrl;
-            updateUI();
+        // Check if running in Electron or web browser
+        if (typeof window.electronAPI !== 'undefined') {
+            // Electron version
+            const result = await window.electronAPI.startTunnel();
+            
+            if (result.success) {
+                isRunning = true;
+                elements.tunnelUrl.value = result.tunnelUrl;
+                updateUI();
+            } else {
+                if (result.error && result.error.includes('Already running')) {
+                    // Update UI to reflect running state
+                    const status = await window.electronAPI.getStatus();
+                    isRunning = status.isRunning;
+                    if (status.tunnelUrl) {
+                        elements.tunnelUrl.value = status.tunnelUrl;
+                    }
+                    updateUI();
+                    addLog(`ℹ️ ${result.error}`);
+                } else if (result.error && result.error.includes('authentication')) {
+                    showAuthDialog();
+                    return;
+                } else {
+                    addLog(`❌ Error: ${result.error}`);
+                }
+            }
         } else {
-            addLog(`Error: ${result.error}`);
+            // Web browser version
+            const response = await fetch('/api/start', { method: 'POST' });
+            const result = await response.json();
+            
+            if (result.success) {
+                isRunning = true;
+                elements.tunnelUrl.value = result.tunnelUrl;
+                addLog(`✅ Tunnel started: ${result.tunnelUrl}`);
+                addLog(`🌐 WebSocket URL: ${result.tunnelUrl.replace('https://', 'wss://')}/`);
+                updateUI();
+            } else {
+                addLog(`❌ Error: ${result.error}`);
+                
+                if (result.error.includes('authentication')) {
+                    const token = prompt('Enter your ngrok authtoken:\n\n1. Sign up at https://ngrok.com\n2. Get your authtoken from dashboard\n3. Enter it below:');
+                    if (token) {
+                        const tokenResponse = await fetch('/api/set-token', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ token })
+                        });
+                        const tokenResult = await tokenResponse.json();
+                        if (tokenResult.success) {
+                            addLog('✅ Token set, please try starting again');
+                        }
+                    }
+                }
+            }
         }
     } catch (error) {
         addLog(`Error: ${error.message}`);
@@ -108,17 +148,6 @@ function toggleTerminal() {
     elements.toggleTerminal.textContent = isVisible ? 'Show' : 'Hide';
 }
 
-// Event listeners
-elements.startBtn.addEventListener('click', startTunnel);
-elements.stopBtn.addEventListener('click', stopTunnel);
-elements.copyBtn.addEventListener('click', copyUrl);
-elements.toggleTerminal.addEventListener('click', toggleTerminal);
-
-// Listen for logs from main process
-window.electronAPI.onLog((event, message) => {
-    addLog(message);
-});
-
 function showAuthDialog() {
     const dialog = document.createElement('div');
     dialog.className = 'auth-dialog';
@@ -139,31 +168,72 @@ function showAuthDialog() {
     
     document.getElementById('auth-cancel').onclick = () => {
         document.body.removeChild(dialog);
-        addLog('Ngrok authentication cancelled');
+        addLog('Authentication cancelled');
     };
     
     document.getElementById('auth-submit').onclick = async () => {
         const token = document.getElementById('auth-token').value.trim();
-        if (!token) return;
+        if (!token) {
+            alert('Please enter your ngrok authtoken');
+            return;
+        }
         
-        const authResult = await window.electronAPI.setNgrokToken(token);
-        document.body.removeChild(dialog);
+        const submitBtn = document.getElementById('auth-submit');
+        submitBtn.textContent = 'Setting...';
+        submitBtn.disabled = true;
         
-        if (authResult) {
+        const result = await window.electronAPI.setNgrokToken(token);
+        
+        if (result) {
+            document.body.removeChild(dialog);
+            addLog('Token set successfully. Starting tunnel...');
             startTunnel();
         } else {
-            addLog('Failed to set ngrok authtoken');
+            submitBtn.textContent = 'Submit';
+            submitBtn.disabled = false;
+            alert('Failed to set token. Please check your token.');
         }
     };
 }
 
-// Initialize UI
-window.electronAPI.getStatus().then(status => {
-    isRunning = status.isRunning;
-    if (status.tunnelUrl) {
-        elements.tunnelUrl.value = status.tunnelUrl;
-    }
-    updateUI();
-});
+elements.startBtn.addEventListener('click', startTunnel);
+elements.stopBtn.addEventListener('click', stopTunnel);
+elements.copyBtn.addEventListener('click', copyUrl);
+elements.toggleTerminal.addEventListener('click', toggleTerminal);
+
+// Initialize based on environment
+if (typeof window.electronAPI !== 'undefined') {
+    // Electron environment
+    window.electronAPI.onLog((event, message) => {
+        addLog(message);
+    });
+
+    window.electronAPI.getStatus().then(status => {
+        isRunning = status.isRunning;
+        if (status.tunnelUrl) {
+            elements.tunnelUrl.value = status.tunnelUrl;
+        }
+        updateUI();
+    }).catch(() => {
+        updateUI();
+    });
+} else {
+    // Web browser environment
+    fetch('/api/status')
+        .then(response => response.json())
+        .then(status => {
+            isRunning = status.isRunning;
+            if (status.tunnelUrl) {
+                elements.tunnelUrl.value = status.tunnelUrl;
+            }
+            updateUI();
+            addLog('🚀 Chrome MCP Tunnel Web Interface Ready');
+            addLog('💡 Click "Start Tunnel" to begin');
+        })
+        .catch(() => {
+            updateUI();
+            addLog('❌ Failed to connect to server');
+        });
+}
 
 updateUI();

@@ -14,16 +14,9 @@ A standalone desktop application that provides easy Chrome remote debugging acce
 
 ## Quick Start
 
-### Windows
-```cmd
-install.bat
-start.bat
-```
-
-### macOS/Linux
 ```bash
-./install.sh
-./start.sh
+npm install
+npm start
 ```
 
 ## How it works

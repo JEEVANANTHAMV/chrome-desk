@@ -1,15 +1,9 @@
 const { app, BrowserWindow, ipcMain } = require('electron');
-const isDev = process.env.NODE_ENV === 'development';
-
-// Handle app not ready in headless environment
-if (!app) {
-  console.log('Electron app not available - running in headless mode');
-  process.exit(0);
-}
-const { spawn, exec } = require('child_process');
+const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const http = require('http');
 
 let mainWindow;
 let processes = { ngrok: null, chrome: null, proxy: null };
@@ -24,13 +18,11 @@ const chromePaths = {
   darwin: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
   win32: [
     'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-    'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
-    path.join(process.env.LOCALAPPDATA || '', 'Google\\Chrome\\Application\\chrome.exe')
+    'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe'
   ],
   linux: ['google-chrome', 'google-chrome-stable', 'chromium-browser', 'chromium']
 };
 
-// Ensure chrome data directory exists
 if (!fs.existsSync(chromeDataDir)) {
   fs.mkdirSync(chromeDataDir, { recursive: true });
 }
@@ -50,6 +42,11 @@ function createWindow() {
 
   mainWindow.loadFile('index.html');
   mainWindow.setMenuBarVisibility(false);
+  
+  // Open DevTools in development
+  if (process.env.NODE_ENV === 'development') {
+    mainWindow.webContents.openDevTools();
+  }
 }
 
 function findChrome() {
@@ -76,42 +73,22 @@ function log(message) {
   const timestamp = new Date().toISOString();
   const logMessage = `[${timestamp}] ${message}`;
   console.log(logMessage);
+  
+  // Write to log file
+  const logFile = path.join(os.homedir(), 'chrome-mcp-tunnel.log');
+  try {
+    fs.appendFileSync(logFile, logMessage + '\n');
+  } catch (e) {}
+  
   if (mainWindow) {
     mainWindow.webContents.send('log', logMessage);
   }
 }
 
-function getNgrokPath() {
-  const ngrok = require('ngrok');
-  return ngrok;
-}
-
-async function startNgrok() {
-  log('Starting ngrok tunnel...');
-  try {
-    const ngrok = getNgrokPath();
-    tunnelUrl = await ngrok.connect(9223);
-    log(`Tunnel URL: ${tunnelUrl}`);
-    return tunnelUrl;
-  } catch (error) {
-    log(`Ngrok error: ${error.message}`);
-    throw error;
-  }
-}
-
-async function checkNgrokAuth() {
-  try {
-    const ngrok = getNgrokPath();
-    // Check if authtoken exists in ngrok config
-    return await ngrok.getAuthtoken();
-  } catch (error) {
-    return false;
-  }
-}
-
 async function setNgrokAuth(token) {
   try {
-    const ngrok = getNgrokPath();
+    log('Setting ngrok authtoken...');
+    const ngrok = require('ngrok');
     await ngrok.authtoken(token.trim());
     log('Ngrok authtoken set successfully');
     return true;
@@ -121,122 +98,146 @@ async function setNgrokAuth(token) {
   }
 }
 
+async function startNgrok() {
+  try {
+    log('Starting ngrok tunnel on port 9223...');
+    const ngrok = require('ngrok');
+    
+    tunnelUrl = await ngrok.connect({
+      port: 9223,
+      proto: 'http'
+    });
+    
+    log(`Tunnel URL: ${tunnelUrl}`);
+    return tunnelUrl;
+  } catch (error) {
+    log(`Ngrok error: ${error.message}`);
+    if (error.message.includes('authentication') || error.message.includes('authtoken')) {
+      throw new Error('Ngrok authentication required. Please set your authtoken.');
+    }
+    throw error;
+  }
+}
+
 function startChrome() {
   return new Promise((resolve, reject) => {
-    log('Starting Chrome with remote debugging...');
+    log('Starting Chrome...');
     
     try {
       const chromePath = findChrome();
-      const hostname = tunnelUrl.replace('https://', '');
+      log(`Using Chrome: ${chromePath}`);
       
-      const chromeArgs = [
+      const args = [
         '--remote-debugging-port=9222',
         '--remote-debugging-address=0.0.0.0',
-        `--remote-debugging-hostname=${hostname}`,
         `--user-data-dir=${chromeDataDir}`,
         '--no-first-run',
-        '--disable-default-apps'
+        '--disable-default-apps',
+        '--headless'
       ];
       
-      log(`Using Chrome at: ${chromePath}`);
-      processes.chrome = spawn(chromePath, chromeArgs);
+      processes.chrome = spawn(chromePath, args, { stdio: 'pipe' });
+      
+      processes.chrome.stdout.on('data', (data) => {
+        log(`Chrome stdout: ${data.toString().trim()}`);
+      });
+      
+      processes.chrome.stderr.on('data', (data) => {
+        log(`Chrome stderr: ${data.toString().trim()}`);
+      });
       
       processes.chrome.on('error', (error) => {
-        log(`Chrome error: ${error.message}`);
+        log(`Chrome spawn error: ${error.message}`);
         reject(error);
       });
       
       processes.chrome.on('close', (code) => {
-        log(`Chrome process exited with code ${code}`);
+        log(`Chrome exited with code ${code}`);
       });
       
       setTimeout(() => {
-        log('Chrome started successfully');
-        resolve();
+        log('Chrome should be started, checking...');
+        // Test if Chrome is accessible
+        const testReq = http.get('http://localhost:9222/json/version', (res) => {
+          log('Chrome debugging port is accessible');
+          resolve();
+        });
+        testReq.on('error', (err) => {
+          log(`Chrome not accessible: ${err.message}`);
+          reject(new Error('Chrome debugging port not accessible'));
+        });
+        testReq.setTimeout(2000);
       }, 3000);
       
     } catch (error) {
-      log(`Error finding Chrome: ${error.message}`);
+      log(`Chrome start error: ${error.message}`);
       reject(error);
     }
   });
 }
 
 function startProxy() {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     log('Starting proxy server...');
     
     const hostname = tunnelUrl.replace('https://', '');
-    const proxyCode = `
-const http = require('http');
-
-const server = http.createServer((req, res) => {
-  const options = {
-    hostname: 'localhost',
-    port: 9222,
-    path: req.url,
-    method: req.method,
-    headers: req.headers
-  };
-  
-  const proxyReq = http.request(options, (proxyRes) => {
-    let body = '';
-    proxyRes.on('data', chunk => body += chunk);
-    proxyRes.on('end', () => {
-      const modifiedBody = body
-        .replace(/ws:\\/\\/localhost:9222\\//g, 'wss://${hostname}/')
-        .replace(/ws=localhost:9222\\//g, 'ws=${hostname}/');
-      
-      res.writeHead(proxyRes.statusCode, proxyRes.headers);
-      res.end(modifiedBody);
-    });
-  });
-  
-  req.pipe(proxyReq);
-});
-
-server.listen(9223, () => console.log('Proxy running'));
-`;
+    const httpProxy = require('http-proxy');
     
-    fs.writeFileSync(path.join(__dirname, 'proxy-temp.js'), proxyCode);
-    processes.proxy = spawn('node', [path.join(__dirname, 'proxy-temp.js')]);
-    
-    processes.proxy.on('close', (code) => {
-      log(`Proxy process exited with code ${code}`);
+    const proxy = httpProxy.createProxyServer({
+      target: 'http://localhost:9222',
+      changeOrigin: true,
+      ws: true
     });
     
-    setTimeout(() => {
-      log('Proxy started successfully');
+    proxy.on('error', (err) => {
+      log(`Proxy error: ${err.message}`);
+    });
+    
+    const server = http.createServer((req, res) => {
+      proxy.web(req, res, (err) => {
+        if (err) {
+          log(`Proxy web error: ${err.message}`);
+          res.writeHead(502);
+          res.end('Chrome not accessible');
+        }
+      });
+    });
+    
+    server.on('upgrade', (req, socket, head) => {
+      proxy.ws(req, socket, head);
+    });
+    
+    server.listen(9223, () => {
+      log('Proxy server started on port 9223');
+      processes.proxy = { kill: () => server.close() };
       resolve();
-    }, 2000);
+    });
   });
 }
 
-async function stopAllProcesses() {
+async function stopAll() {
   log('Stopping all processes...');
   
-  // Stop ngrok
-  try {
-    const ngrok = getNgrokPath();
-    await ngrok.disconnect();
-  } catch (e) {}
+  if (processes.proxy && processes.proxy.kill) {
+    processes.proxy.kill();
+  }
   
-  // Stop other processes
-  Object.keys(processes).forEach(key => {
-    if (processes[key]) {
-      processes[key].kill();
-      processes[key] = null;
+  if (tunnelUrl) {
+    try {
+      const ngrok = require('ngrok');
+      await ngrok.disconnect(tunnelUrl);
+    } catch (e) {
+      log(`Error stopping ngrok: ${e.message}`);
     }
-  });
+  }
   
-  // Clean up temp proxy file
-  try {
-    fs.unlinkSync(path.join(__dirname, 'proxy-temp.js'));
-  } catch (e) {}
+  if (processes.chrome) {
+    processes.chrome.kill('SIGTERM');
+  }
   
+  processes = { ngrok: null, chrome: null, proxy: null };
   isRunning = false;
   tunnelUrl = '';
-  log('All processes stopped');
 }
 
 async function startTunnel() {
@@ -250,12 +251,10 @@ async function startTunnel() {
     await startProxy();
     
     isRunning = true;
-    log('All services started successfully');
     return { success: true, tunnelUrl };
     
   } catch (error) {
-    log(`Error starting services: ${error.message}`);
-    await stopAllProcesses();
+    await stopAll();
     return { success: false, error: error.message };
   }
 }
@@ -263,34 +262,19 @@ async function startTunnel() {
 app.whenReady().then(createWindow);
 
 app.on('window-all-closed', () => {
-  stopAllProcesses();
+  stopAll();
   if (process.platform !== 'darwin') {
     app.quit();
   }
 });
 
-app.on('activate', () => {
-  if (BrowserWindow.getAllWindows().length === 0) {
-    createWindow();
-  }
-});
-
 app.on('before-quit', () => {
-  stopAllProcesses();
-});
-
-app.on('will-quit', (event) => {
-  if (isRunning) {
-    event.preventDefault();
-    stopAllProcesses().then(() => {
-      app.quit();
-    });
-  }
+  stopAll();
 });
 
 ipcMain.handle('start-tunnel', startTunnel);
-ipcMain.handle('stop-tunnel', () => {
-  stopAllProcesses();
+ipcMain.handle('stop-tunnel', async () => {
+  await stopAll();
   return { success: true };
 });
 ipcMain.handle('get-status', () => ({ isRunning, tunnelUrl }));
@@ -298,7 +282,20 @@ ipcMain.handle('set-ngrok-token', async (event, token) => {
   return await setNgrokAuth(token);
 });
 ipcMain.handle('check-ngrok-auth', async () => {
-  return await checkNgrokAuth();
+  try {
+    const os = require('os');
+    const path = require('path');
+    const fs = require('fs');
+    
+    const configPath = path.join(os.homedir(), '.ngrok2', 'ngrok.yml');
+    if (fs.existsSync(configPath)) {
+      const config = fs.readFileSync(configPath, 'utf8');
+      return config.includes('authtoken:');
+    }
+    return false;
+  } catch (error) {
+    return false;
+  }
 });
 ipcMain.handle('open-external', async (event, url) => {
   const { shell } = require('electron');
