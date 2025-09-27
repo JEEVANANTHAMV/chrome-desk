@@ -15,12 +15,26 @@ const PROXY_PORT = 9223;
 let processes = { chrome: null, proxyServer: null, ngrok: null };
 let tunnelUrl = '';
 let isRunning = false;
+let isShuttingDown = false;
 
 function log(msg) {
   const line = `[${new Date().toISOString()}] ${msg}`;
   console.log(line);
   try { fs.appendFileSync(path.join(homeDir, 'chrome-mcp-tunnel.log'), line + '\n'); } catch (e) {}
-  if (mainWindow && mainWindow.webContents) mainWindow.webContents.send('log', line);
+  // Use the safe sender instead of direct access
+  safeSendToRenderer('log', line);
+}
+
+function safeSendToRenderer(channel, data) {
+  if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents && !mainWindow.webContents.isDestroyed()) {
+    try {
+      mainWindow.webContents.send(channel, data);
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+  return false;
 }
 
 function createWindow() {
@@ -112,29 +126,6 @@ async function checkNgrokAuth() {
   }
 }
 
-// Prefer programmatic connect, fallback to spawning CLI if control-port errors occur
-async function startNgrok() {
-  // Try programmatic first (fast on many systems)
-  try {
-    const ngrok = require('ngrok');
-    log('Attempting programmatic ngrok.connect (inspect disabled).');
-    const url = await ngrok.connect({ proto: 'http', addr: PROXY_PORT, inspect: false });
-    if (url) {
-      tunnelUrl = url;
-      log('ngrok programmatic connected: ' + url);
-      processes.ngrok = { kind: 'programmatic' };
-      return url;
-    }
-  } catch (err) {
-    const msg = err && err.message ? err.message : String(err);
-    log('Programmatic ngrok.connect failed: ' + msg);
-    // if it's an IPv6/::1:4040 ECONNREFUSED or similar, we will fallback to CLI spawn below
-  }
-
-  // FALLBACK: spawn the ngrok CLI from node_modules/.bin (reliable on Windows)
-  return await spawnNgrokCli();
-}
-
 // Add this function to find an available port
 async function findAvailablePort(startPort = 4040) {
   const net = require('net');
@@ -159,9 +150,9 @@ async function findAvailablePort(startPort = 4040) {
   throw new Error('No available ports found');
 }
 
-// Add this function to create a temporary ngrok config file
+// Replace the createNgrokConfig function with this
 function createNgrokConfig(webAddr) {
-  const configPath = path.join(__dirname, 'ngrok-temp.yml');
+  const configPath = path.join(app.getPath('userData'), 'ngrok-temp.yml');
   const configContent = `version: 3
 agent:
   web_addr: ${webAddr}
@@ -183,6 +174,137 @@ async function isPortInUse(port) {
   });
 }
 
+// Add this function to download ngrok at runtime
+async function ensureNgrokBinary() {
+  if (app.isPackaged) {
+    const fs = require('fs');
+    const path = require('path');
+    const https = require('https');
+    const { pipeline } = require('stream');
+    const { promisify } = require('util');
+    const streamPipeline = promisify(pipeline);
+    
+    const appPath = app.getPath('exe');
+    const appDir = path.dirname(appPath);
+    const ngrokPath = path.join(appDir, platform === 'win32' ? 'ngrok.exe' : 'ngrok');
+    
+    if (!fs.existsSync(ngrokPath)) {
+      log('Ngrok binary not found, downloading...');
+      
+      // Try multiple download URLs in case one fails
+      const downloadUrls = platform === 'win32' 
+        ? [
+            'https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip',
+            'https://github.com/ngrok/ngrok/releases/download/v3.1.0/ngrok-v3-stable-windows-amd64.zip'
+          ]
+        : platform === 'darwin'
+          ? [
+              'https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-darwin-amd64.zip',
+              'https://github.com/ngrok/ngrok/releases/download/v3.1.0/ngrok-v3-stable-darwin-amd64.zip'
+            ]
+          : [
+              'https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.zip',
+              'https://github.com/ngrok/ngrok/releases/download/v3.1.0/ngrok-v3-stable-linux-amd64.zip'
+            ];
+      
+      const zipPath = path.join(appDir, 'ngrok.zip');
+      
+      let downloadSuccess = false;
+      
+      // Try each URL until one succeeds
+      for (const downloadUrl of downloadUrls) {
+        try {
+          log(`Attempting to download ngrok from: ${downloadUrl}`);
+          
+          // Download the zip file
+          await new Promise((resolve, reject) => {
+            const file = fs.createWriteStream(zipPath);
+            https.get(downloadUrl, response => {
+              if (response.statusCode === 200) {
+                streamPipeline(response, file)
+                  .then(() => resolve())
+                  .catch(reject);
+              } else {
+                reject(new Error(`HTTP ${response.statusCode}`));
+              }
+            }).on('error', reject);
+          });
+          
+          // Extract the zip file
+          const AdmZip = require('adm-zip');
+          const zip = new AdmZip(zipPath);
+          zip.extractAllTo(appDir, true);
+          
+          // Make it executable on non-Windows
+          if (platform !== 'win32') {
+            fs.chmodSync(ngrokPath, '755');
+          }
+          
+          // Clean up
+          fs.unlinkSync(zipPath);
+          
+          log('Ngrok binary downloaded successfully');
+          downloadSuccess = true;
+          break; // Exit the loop if download succeeds
+        } catch (err) {
+          log(`Failed to download ngrok from ${downloadUrl}: ${err.message}`);
+          // Continue to the next URL
+        }
+      }
+      
+      if (!downloadSuccess) {
+        throw new Error('Failed to download ngrok from all sources');
+      }
+    } else {
+      log('Ngrok binary found at: ' + ngrokPath);
+    }
+  }
+}
+
+// Modify the startNgrok function to handle network restrictions
+async function startNgrok() {
+  // Use CLI approach for both development and packaged versions
+  log('Using ngrok CLI approach');
+  
+  try {
+    return await spawnNgrokCli();
+  } catch (err) {
+    log(`ngrok CLI failed: ${err.message}`);
+    
+    // Check if it's a network-related error
+    if (err.message.includes('EACCES') || 
+        err.message.includes('ENOTFOUND') || 
+        err.message.includes('ECONNREFUSED') ||
+        err.message.includes('network') ||
+        err.message.includes('firewall')) {
+      log('Network restriction detected. Trying alternative approach...');
+      
+      // Try with different port ranges
+      for (let port = 8080; port <= 8090; port++) {
+        try {
+          log(`Trying with port ${port}...`);
+          // Modify the spawnNgrokCli function to accept a port parameter
+          return await spawnNgrokCliWithPort(port);
+        } catch (portErr) {
+          log(`Port ${port} failed: ${portErr.message}`);
+        }
+      }
+      
+      throw new Error('All ports blocked by network restrictions');
+    }
+    
+    throw err;
+  }
+}
+
+// Replace the entire startNgrok function with this
+async function startNgrok() {
+  // Use CLI approach for both development and packaged versions
+  log('Using ngrok CLI approach');
+  return await spawnNgrokCli();
+}
+
+// Replace the spawnNgrokCli function with this
 function spawnNgrokCli() {
   return new Promise(async (resolve, reject) => {
     try {
@@ -194,11 +316,35 @@ function spawnNgrokCli() {
       const configPath = createNgrokConfig(webAddr);
       
       // binary path resolution
-      const localBin = path.join(__dirname, 'node_modules', '.bin', platform === 'win32' ? 'ngrok.cmd' : 'ngrok');
-      const fallback = 'ngrok';
-      const binary = fs.existsSync(localBin) ? localBin : fallback;
+      let binary;
+      if (app.isPackaged) {
+        // In packaged app, try multiple locations
+        const appPath = app.getPath('exe');
+        const appDir = path.dirname(appPath);
+        
+        // Try next to the executable first
+        binary = path.join(appDir, platform === 'win32' ? 'ngrok.exe' : 'ngrok');
+        
+        // If not found, try in resources directory
+        if (!fs.existsSync(binary)) {
+          binary = path.join(appDir, 'resources', platform === 'win32' ? 'ngrok.exe' : 'ngrok');
+        }
+        
+        // If still not found, try in unpacked node_modules
+        if (!fs.existsSync(binary)) {
+          binary = path.join(appDir, 'resources', 'app.asar.unpacked', 'node_modules', '.bin', platform === 'win32' ? 'ngrok.exe' : 'ngrok');
+        }
+        
+        if (!fs.existsSync(binary)) {
+          throw new Error(`ngrok binary not found. Please ensure ngrok is properly packaged with your application.`);
+        }
+      } else {
+        // In development environment
+        const localBin = path.join(__dirname, 'node_modules', '.bin', platform === 'win32' ? 'ngrok.cmd' : 'ngrok');
+        binary = fs.existsSync(localBin) ? localBin : 'ngrok';
+      }
 
-      // prefer to pass authtoken explicitly in CLI if config exists (skip if not)
+      // Get authtoken from config
       let tokenArg = [];
       const cfg = (function findToken() {
         const cfgPaths = [path.join(homeDir, '.ngrok2', 'ngrok.yml'), path.join(homeDir, 'AppData', 'Local', 'ngrok', 'ngrok.yml')];
@@ -312,6 +458,51 @@ function spawnNgrokCli() {
   });
 }
 
+// Replace the setNgrokAuth function to work without the ngrok package in packaged version
+async function setNgrokAuth(token) {
+  try {
+    if (!token || typeof token !== 'string' || token.trim() === '') {
+      log('setNgrokAuth: invalid token');
+      return false;
+    }
+    
+    if (!app.isPackaged) {
+      // In development, use the ngrok package
+      const ngrok = require('ngrok');
+      await ngrok.authtoken(token.trim());
+      log('ngrok authtoken saved programmatically.');
+    } else {
+      // In packaged version, save to config file directly
+      const ngrokDir = path.join(homeDir, '.ngrok2');
+      if (!fs.existsSync(ngrokDir)) {
+        fs.mkdirSync(ngrokDir, { recursive: true });
+      }
+      
+      const configPath = path.join(ngrokDir, 'ngrok.yml');
+      let configContent = '';
+      
+      if (fs.existsSync(configPath)) {
+        configContent = fs.readFileSync(configPath, 'utf8');
+      }
+      
+      // Remove existing authtoken if any
+      configContent = configContent.replace(/^authtoken:.*$/m, '').trim();
+      
+      // Add new authtoken
+      configContent += `\nauthtoken: ${token.trim()}\n`;
+      
+      fs.writeFileSync(configPath, configContent);
+      log('ngrok authtoken saved to config file.');
+    }
+    
+    return true;
+  } catch (err) {
+    log('setNgrokAuth error: ' + (err && err.message ? err.message : String(err)));
+    return false;
+  }
+}
+
+// Remove the ensureNgrokBinary function entirely - we don't need it anymore
 // Add function to find an available port for Chrome debugging
 async function findAvailableChromeDebugPort(startPort = 9222) {
   for (let port = startPort; port < startPort + 10; port++) {
@@ -347,6 +538,25 @@ async function startChrome() {
         '--disable-extensions', // Disable extensions to prevent conflicts
         '--disable-plugins',   // Disable plugins
         '--disable-images',     // Disable images to speed up loading (optional)
+        '--disable-background-timer-throttling',
+        '--disable-backgrounding-occluded-windows',
+        '--disable-renderer-backgrounding',
+        '--no-sandbox', // Helps with process cleanup
+        '--disable-dev-shm-usage', // Helps with resource cleanup
+        '--disable-features=TranslateUI', // Prevents automatic closing
+        '--disable-ipc-flooding-protection', // Prevents automatic closing
+        '--disable-logging', // Reduces log noise
+        '--disable-breakpad', // Disables crash reporting
+        '--disable-component-update', // Prevents automatic updates
+        '--disable-domain-reliability', // Prevents automatic closing
+        '--disable-client-side-phishing-detection', // Prevents automatic closing
+        '--disable-popup-blocking', // Prevents popups that might cause issues
+        '--disable-prompt-on-repost', // Prevents prompts that might cause issues
+        '--disable-hang-monitor', // Prevents hang monitoring that might close Chrome
+        '--disable-sync-preferences', // Prevents sync that might cause issues
+        '--disable-restore-session-state', // Prevents session restore that might cause issues
+        '--disable-component-extensions-with-background-pages', // Prevents extensions from running
+        '--disable-background-mode' // Prevents background mode that might cause issues
       ];
 
       log(`Launching Chrome: ${chromePath} ${args.join(' ')}`);
@@ -380,8 +590,10 @@ async function startChrome() {
       processes.chrome.on('exit', (code, signal) => {
         log(`Chrome exited with code ${code}${signal ? (' signal: ' + signal) : ''}`);
         chromeExited = true;
+        processes.chrome = null; // Clear the reference immediately
         
-        if (!resolved) {
+        // Only reject if we haven't resolved yet and we're not in the process of shutting down
+        if (!resolved && !isShuttingDown) {
           resolved = true;
           let errorMsg = `Chrome exited unexpectedly with code ${code}`;
           if (stderrBuf) errorMsg += `. stderr: ${stderrBuf.substring(0, 500)}`;
@@ -503,58 +715,98 @@ async function startTunnel() {
 }
 
 async function stopAll() {
-  log('Stopping all components...');
-  try {
-    // Stop proxy server first to prevent new connections
-    if (processes.proxyServer) {
+  console.log('Stopping all components...');
+  isRunning = false;
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+  
+  const stopPromises = [];
+  
+  // Stop proxy server first to prevent new connections
+  if (processes.proxyServer) {
+    stopPromises.push(new Promise((resolve) => {
       try { 
-        processes.proxyServer.close(); 
-        log('Proxy server stopped');
-      } catch (e) { log('proxy close: ' + e.message); }
-      processes.proxyServer = null;
-    }
+        processes.proxyServer.close(() => {
+          console.log('Proxy server stopped');
+          resolve();
+        }); 
+      } catch (e) { 
+        console.error('proxy close error:', e.message); 
+        resolve();
+      }
+    }));
+    processes.proxyServer = null;
+  }
 
-    // Stop ngrok
-    if (processes.ngrok) {
+  // Stop ngrok
+  if (processes.ngrok) {
+    stopPromises.push(new Promise(async (resolve) => {
       try {
         if (processes.ngrok.pid && processes.ngrok.kill) {
-          processes.ngrok.kill();
-          log('ngrok process killed');
+          processes.ngrok.kill('SIGTERM');
+          console.log('ngrok process killed');
         } else {
           try { 
             const ngrok = require('ngrok'); 
             await ngrok.disconnect(); 
             await ngrok.kill(); 
-            log('ngrok disconnected and killed');
-          } catch (e) { log('ngrok programmatic stop error: ' + e.message); }
+            console.log('ngrok disconnected and killed');
+          } catch (e) { console.error('ngrok programmatic stop error:', e.message); }
         }
-      } catch (e) { log('ngrok stop error: ' + e.message); }
-      processes.ngrok = null;
-      tunnelUrl = '';
-    } else {
+      } catch (e) { console.error('ngrok stop error:', e.message); }
+      resolve();
+    }));
+    processes.ngrok = null;
+    tunnelUrl = '';
+  } else {
+    // Fallback cleanup
+    stopPromises.push(new Promise(async (resolve) => {
       try { 
         const ngrok = require('ngrok'); 
         await ngrok.disconnect(); 
         await ngrok.kill(); 
-        log('ngrok disconnected and killed (fallback)');
-      } catch (e) { log('ngrok fallback stop error: ' + e.message); }
-      tunnelUrl = '';
-    }
+        console.log('ngrok disconnected and killed (fallback)');
+      } catch (e) { console.error('ngrok fallback stop error:', e.message); }
+      resolve();
+    }));
+    tunnelUrl = '';
+  }
 
-    // Stop ONLY the Chrome process started by this app
-    if (processes.chrome) {
+  // Stop Chrome process
+  if (processes.chrome) {
+    stopPromises.push(new Promise((resolve) => {
       try { 
         processes.chrome.kill('SIGTERM'); 
-        log('Chrome process terminated');
-      } catch (e) { log('chrome kill: ' + e.message); }
-      processes.chrome = null;
-    }
-  } catch (e) {
-    log('stopAll error: ' + e.message);
-  } finally {
-    isRunning = false;
-    log('All components stopped.');
+        console.log('Chrome process terminated');
+        // Give Chrome time to close gracefully
+        setTimeout(() => {
+          if (processes.chrome && !processes.chrome.killed) {
+            try {
+              processes.chrome.kill('SIGKILL');
+              console.log('Chrome process force killed');
+            } catch (e) {}
+          }
+          resolve();
+        }, 2000);
+      } catch (e) { 
+        console.error('chrome kill error:', e.message); 
+        resolve();
+      }
+    }));
+    processes.chrome = null;
   }
+
+  // Wait for all cleanup operations with timeout
+  try {
+    await Promise.race([
+      Promise.all(stopPromises),
+      new Promise(resolve => setTimeout(resolve, 5000)) // 5 second timeout
+    ]);
+  } catch (e) {
+    console.error('stopAll error:', e.message);
+  }
+  
+  console.log('All components stopped.');
 }
 
 function startProxy(hostname) {
@@ -671,12 +923,58 @@ function killExistingNgrokProcesses() {
     
     exec(command, (error) => {
       if (error) {
-        log(`No existing ngrok processes found or error killing them: ${error.message}`);
+        console.log(`No existing ngrok processes found or error killing them: ${error.message}`);
       } else {
-        log('Killed existing ngrok processes');
+        console.log('Killed existing ngrok processes');
       }
       resolve();
     });
+  });
+}
+
+// Add function to kill all related processes on app exit
+function forceKillAllProcesses() {
+  return new Promise((resolve) => {
+    const { exec } = require('child_process');
+    const commands = [];
+    
+    if (platform === 'win32') {
+      commands.push('taskkill /F /IM ngrok.exe');
+      commands.push('taskkill /F /IM chrome.exe /FI "COMMANDLINE eq *--remote-debugging-port*"');
+    } else {
+      commands.push('pkill -f ngrok');
+      commands.push('pkill -f "chrome.*--remote-debugging-port"');
+    }
+    
+    let completed = 0;
+    const total = commands.length;
+    
+    if (total === 0) {
+      resolve();
+      return;
+    }
+    
+    commands.forEach(command => {
+      exec(command, (error) => {
+        if (error) {
+          console.log(`Process cleanup command failed: ${command} - ${error.message}`);
+        } else {
+          console.log(`Process cleanup successful: ${command}`);
+        }
+        completed++;
+        if (completed === total) {
+          resolve();
+        }
+      });
+    });
+    
+    // Timeout after 3 seconds
+    setTimeout(() => {
+      if (completed < total) {
+        console.log('Process cleanup timeout');
+        resolve();
+      }
+    }, 3000);
   });
 }
 
@@ -686,26 +984,93 @@ app.whenReady().then(createWindow).catch(e => {
 });
 
 app.on('window-all-closed', async () => { 
-  await stopAll(); 
-  if (platform !== 'darwin') app.quit(); 
+  if (isShuttingDown) return; // Add this at the beginning
+  try {
+    await stopAll();
+    await forceKillAllProcesses();
+  } catch (e) {
+    console.error('Error during cleanup:', e);
+  }
+  if (platform !== 'darwin') {
+    app.exit(0);
+  }
 });
 
-app.on('before-quit', async (event) => { 
-  if (isRunning) { 
-    event.preventDefault(); 
-    await stopAll(); 
-    app.quit(); 
-  } 
+app.on('before-quit', async (event) => {
+  if (isShuttingDown) return;
+  event.preventDefault();
+  try {
+    await stopAll();
+    await forceKillAllProcesses();
+  } catch (e) {
+    console.error('Error during cleanup:', e);
+  }
+  // Force quit after cleanup
+  setImmediate(() => {
+    app.exit(0);
+  });
 });
 
 process.on('uncaughtException', async (err) => { 
-  log('Uncaught Exception: ' + (err && err.message ? err.message : String(err))); 
-  await stopAll(); 
+  if (isShuttingDown || (err.message && err.message.includes('Object has been destroyed'))) {
+    process.exit(1);
+}
+  console.error('Uncaught Exception:', err); 
+  try {
+    await stopAll(); 
+    await forceKillAllProcesses();
+  } catch (e) {
+    console.error('Error during cleanup:', e);
+  }
+  process.exit(1);
 });
 
-process.on('unhandledRejection', async (err) => { 
-  log('Unhandled Rejection: ' + (err && err.message ? err.message : String(err))); 
-  await stopAll(); 
+// Handle process termination signals
+process.on('SIGTERM', async () => {
+  if (isShuttingDown) return;
+  console.log('Received SIGTERM, shutting down gracefully');
+  try {
+    await stopAll();
+    await forceKillAllProcesses();
+  } catch (e) {
+    console.error('Error during SIGTERM cleanup:', e);
+  }
+  process.exit(0);
+});
+
+process.on('SIGINT', async () => {
+  if (isShuttingDown) return;
+  console.log('Received SIGINT, shutting down gracefully');
+  try {
+    await stopAll();
+    await forceKillAllProcesses();
+  } catch (e) {
+    console.error('Error during SIGINT cleanup:', e);
+  }
+  process.exit(0);
+});
+
+// Windows specific signal
+if (platform === 'win32') {
+  process.on('SIGBREAK', async () => {
+    if (isShuttingDown) return;
+    console.log('Received SIGBREAK, shutting down gracefully');
+    try {
+      await stopAll();
+      await forceKillAllProcesses();
+    } catch (e) {
+      console.error('Error during SIGBREAK cleanup:', e);
+    }
+    process.exit(0);
+  });
+}
+
+process.on('unhandledRejection', (err) => { 
+  // Only log if it's not the "Object has been destroyed" error or if we're not shutting down
+  if (!isShuttingDown && (!err.message || !err.message.includes('Object has been destroyed'))) {
+    console.error('Unhandled Rejection:', err);
+  }
+  // Don't call stopAll for unhandled rejections as it might cause more issues
 });
 
 ipcMain.handle('start-tunnel', startTunnel);
