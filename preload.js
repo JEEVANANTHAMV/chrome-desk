@@ -7,5 +7,5 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setNgrokToken: (token) => ipcRenderer.invoke('set-ngrok-token', token),
   checkNgrokAuth: () => ipcRenderer.invoke('check-ngrok-auth'),
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
-  onLog: (callback) => ipcRenderer.on('log', callback)
+  onLog: (cb) => ipcRenderer.on('log', cb)
 });
