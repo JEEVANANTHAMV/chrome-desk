@@ -318,25 +318,12 @@ function spawnNgrokCli() {
       // binary path resolution
       let binary;
       if (app.isPackaged) {
-        // In packaged app, try multiple locations
-        const appPath = app.getPath('exe');
-        const appDir = path.dirname(appPath);
-        
-        // Try next to the executable first
-        binary = path.join(appDir, platform === 'win32' ? 'ngrok.exe' : 'ngrok');
-        
-        // If not found, try in resources directory
-        if (!fs.existsSync(binary)) {
-          binary = path.join(appDir, 'resources', platform === 'win32' ? 'ngrok.exe' : 'ngrok');
-        }
-        
-        // If still not found, try in unpacked node_modules
-        if (!fs.existsSync(binary)) {
-          binary = path.join(appDir, 'resources', 'app.asar.unpacked', 'node_modules', '.bin', platform === 'win32' ? 'ngrok.exe' : 'ngrok');
-        }
+        // In packaged app, look in resources/ngrok-bin/
+        const resourcesPath = process.resourcesPath;
+        binary = path.join(resourcesPath, 'ngrok-bin', platform === 'win32' ? 'ngrok.exe' : 'ngrok');
         
         if (!fs.existsSync(binary)) {
-          throw new Error(`ngrok binary not found. Please ensure ngrok is properly packaged with your application.`);
+          throw new Error(`ngrok binary not found at ${binary}. Please ensure ngrok is properly packaged with your application.`);
         }
       } else {
         // In development environment

@@ -38,13 +38,8 @@
     ],
     "extraResources": [
       {
-        "from": "node_modules/ngrok/bin/ngrok.exe",
-        "to": "ngrok.exe",
-        "filter": ["**/*"]
-      },
-      {
-        "from": "node_modules/ngrok/bin/ngrok",
-        "to": "ngrok",
+        "from": "node_modules/ngrok/bin/",
+        "to": "ngrok-bin/",
         "filter": ["**/*"]
       }
     ],
