@@ -4,6 +4,7 @@ node_modules/
 
 # Production builds
 client/build/
+dist/
 
 # Environment variables
 .env
