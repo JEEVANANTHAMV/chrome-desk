@@ -4,7 +4,10 @@ node_modules/
 
 # Production builds
 client/build/
-dist/
+dist/*
+# But track installer files
+!dist/*.dmg
+!dist/*.exe
 
 # Environment variables
 .env
