@@ -321,15 +321,17 @@ function spawnNgrokCli() {
       if (app.isPackaged) {
         // In packaged app, look in resources/ngrok-bin/
         const resourcesPath = process.resourcesPath;
-        binary = path.join(resourcesPath, 'ngrok-bin', platform === 'win32' ? 'ngrok.exe' : 'ngrok');
+        binary = path.join(resourcesPath, 'ngrok-bin', platform, platform === 'win32' ? 'ngrok.exe' : 'ngrok');
         
         if (!fs.existsSync(binary)) {
           throw new Error(`ngrok binary not found at ${binary}. Please ensure ngrok is properly packaged with your application.`);
         }
       } else {
-        // In development environment
-        const localBin = path.join(__dirname, 'node_modules', '.bin', platform === 'win32' ? 'ngrok.cmd' : 'ngrok');
-        binary = fs.existsSync(localBin) ? localBin : 'ngrok';
+        // In development environment, use local binaries
+        binary = path.join(__dirname, 'ngrok-binaries', platform, platform === 'win32' ? 'ngrok.exe' : 'ngrok');
+        if (!fs.existsSync(binary)) {
+          throw new Error(`ngrok binary not found at ${binary}. Run 'npm run download-ngrok' first.`);
+        }
       }
 
       // Get authtoken from config

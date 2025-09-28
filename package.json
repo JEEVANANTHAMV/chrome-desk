@@ -15,10 +15,10 @@
     "prebuild": "powershell -Command \"Get-Process -Name ngrok -ErrorAction SilentlyContinue | Stop-Process -Force; Start-Sleep -Seconds 2\" || exit 0"
   },
   "dependencies": {
-    "http-proxy": "^1.18.1",
-    "ngrok": "^5.0.0-beta.2"
+    "http-proxy": "^1.18.1"
   },
   "devDependencies": {
+    "adm-zip": "^0.5.16",
     "electron": "^27.0.0",
     "electron-builder": "^24.6.4"
   },
@@ -39,9 +39,11 @@
     ],
     "extraResources": [
       {
-        "from": "node_modules/ngrok/bin/",
+        "from": "ngrok-binaries/",
         "to": "ngrok-bin/",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
       }
     ],
     "asar": true,
