@@ -41,6 +41,7 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 900,
     height: 720,
+    icon: path.join(__dirname, 'images.png'),
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,

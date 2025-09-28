@@ -25,6 +25,7 @@
   "build": {
     "appId": "com.chrome-mcp-tunnel.app",
     "productName": "Chrome MCP Tunnel",
+    "icon": "images.png",
     "directories": {
       "output": "dist"
     },
@@ -49,10 +50,12 @@
     ],
     "mac": {
       "category": "public.app-category.developer-tools",
-      "target": "dmg"
+      "target": "dmg",
+      "icon": "images.png"
     },
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "icon": "images.png"
     },
     "nsis": {
       "oneClick": false,
@@ -64,7 +67,8 @@
       "include": "build/installer.nsh"
     },
     "linux": {
-      "target": "AppImage"
+      "target": "AppImage",
+      "icon": "images.png"
     }
   },
   "keywords": [
