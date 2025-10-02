@@ -8,6 +8,7 @@ dist/*
 # But track installer files
 !dist/*.dmg
 !dist/*.exe
+!dist/*.AppImage
 
 # Environment variables
 .env

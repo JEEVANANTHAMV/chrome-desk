@@ -319,18 +319,38 @@ function spawnNgrokCli() {
       // binary path resolution
       let binary;
       if (app.isPackaged) {
-        // In packaged app, look in resources/ngrok-bin/
+        // In packaged app, look in resources path
         const resourcesPath = process.resourcesPath;
-        binary = path.join(resourcesPath, 'ngrok-bin', platform, platform === 'win32' ? 'ngrok.exe' : 'ngrok');
+        binary = path.join(resourcesPath, 'ngrok-binaries', platform, platform === 'win32' ? 'ngrok.exe' : 'ngrok');
         
         if (!fs.existsSync(binary)) {
-          throw new Error(`ngrok binary not found at ${binary}. Please ensure ngrok is properly packaged with your application.`);
+          // Try alternative path for AppImage
+          const appPath = path.dirname(process.execPath);
+          binary = path.join(appPath, 'resources', 'ngrok-binaries', platform, platform === 'win32' ? 'ngrok.exe' : 'ngrok');
+          
+          if (!fs.existsSync(binary)) {
+            throw new Error(`ngrok binary not found. Tried: ${path.join(resourcesPath, 'ngrok-binaries', platform, platform === 'win32' ? 'ngrok.exe' : 'ngrok')} and ${binary}`);
+          }
+        }
+
+        // Ensure binary is executable on Unix systems
+        if (platform !== 'win32') {
+          try {
+            const stat = fs.statSync(binary);
+            // Check if file is executable for user
+            if (!(stat.mode & fs.constants.S_IXUSR)) {
+              fs.chmodSync(binary, '755');
+              log('Set executable permissions on ngrok binary');
+            }
+          } catch (err) {
+            log('Warning: Could not set executable permissions on ngrok binary: ' + err.message);
+          }
         }
       } else {
         // In development environment, use local binaries
         binary = path.join(__dirname, 'ngrok-binaries', platform, platform === 'win32' ? 'ngrok.exe' : 'ngrok');
         if (!fs.existsSync(binary)) {
-          throw new Error(`ngrok binary not found at ${binary}. Run 'npm run download-ngrok' first.`);
+          throw new Error(`ngrok binary not found at ${binary}. Please ensure ngrok binaries are present in the ngrok-binaries directory.`);
         }
       }
 

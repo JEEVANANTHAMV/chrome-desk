@@ -40,7 +40,7 @@
     "extraResources": [
       {
         "from": "ngrok-binaries/",
-        "to": "ngrok-bin/",
+        "to": "ngrok-binaries/",
         "filter": [
           "**/*"
         ]
